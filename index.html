@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Super Kiro World</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #0a0a0a;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            font-family: 'Courier New', monospace;
+            color: white;
+        }
+        
+        #gameContainer {
+            text-align: center;
+        }
+        
+        #gameCanvas {
+            border: 2px solid #FF8C00;
+            background-color: #1a1a1a;
+        }
+        
+        #gameUI {
+            margin-top: 10px;
+            font-size: 18px;
+            color: #FFB84D;
+        }
+        
+        #instructions {
+            margin-top: 15px;
+            font-size: 14px;
+            color: #999;
+        }
+        
+        .game-over {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(0, 0, 0, 0.8);
+            padding: 20px;
+            border: 2px solid #FF8C00;
+            border-radius: 10px;
+            text-align: center;
+            color: white;
+        }
+        
+        .restart-btn {
+            background-color: #FF8C00;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            border-radius: 5px;
+            margin-top: 10px;
+        }
+        
+        .restart-btn:hover {
+            background-color: #FFA500;
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <canvas id="gameCanvas" width="800" height="600"></canvas>
+        <div id="gameUI">
+            <span>Score: <span id="score">0</span></span>
+            <span style="margin-left: 30px;">High Score: <span id="highScore">0</span></span>
+            <span style="margin-left: 30px;">Lives: <span id="lives">3</span></span>
+            <span style="margin-left: 30px;">Level: <span id="level">1</span></span>
+        </div>
+        <div id="instructions">
+            Use ARROW KEYS or WASD to fly around • Collect gems & power-ups • Reach the flag to win!
+        </div>
+    </div>
+    
+    <script src="game.js"></script>
+</body>
+</html>
