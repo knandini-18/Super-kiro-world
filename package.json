@@ -1,0 +1,16 @@
+{
+  "name": "super-kiro-world",
+  "version": "1.0.0",
+  "description": "A 2D platformer game featuring Kiro",
+  "main": "game.js",
+  "scripts": {
+    "test": "vitest --run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "vitest": "^1.0.0",
+    "fast-check": "^3.15.0",
+    "jsdom": "^23.0.0"
+  },
+  "type": "module"
+}

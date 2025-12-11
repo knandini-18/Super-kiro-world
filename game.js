@@ -26,6 +26,17 @@ class Particle {
         // Update alpha based on remaining life for fade effect
         this.alpha = Math.max(0, this.life / this.maxLife);
         
+        // Special twinkling animation for sparkle particles
+        if (this.type === 'sparkle' && this.twinkleSpeed) {
+            // Create twinkling effect by modulating alpha with sine wave
+            const twinkleTime = (this.maxLife - this.life) * this.twinkleSpeed + this.twinkleOffset;
+            const twinkleAlpha = 0.3 + 0.7 * (Math.sin(twinkleTime) * 0.5 + 0.5);
+            this.alpha *= twinkleAlpha;
+            
+            // Add gentle floating motion for sparkles
+            this.velocityY += Math.sin(twinkleTime * 0.5) * 0.01;
+        }
+        
         // Apply gravity for certain particle types
         if (this.type === 'explosion' || this.type === 'confetti') {
             this.velocityY += 0.3 * deltaTime; // Gravity effect
@@ -111,101 +122,214 @@ class Particle {
     }
 }
 
-// Particle System class with basic particle management
+// Particle System class with performance optimization and object pooling
 class ParticleSystem {
     constructor(ctx) {
         this.ctx = ctx;
         this.particles = [];
         this.maxParticles = 200; // Performance limit
+        
+        // Object pooling for performance optimization
+        this.particlePool = [];
+        this.poolSize = 300; // Pool size larger than max active particles
+        this.initializePool();
+        
+        // Performance monitoring
+        this.performanceStats = {
+            frameCount: 0,
+            lastFPSCheck: Date.now(),
+            currentFPS: 60,
+            particleCreationCount: 0,
+            poolHits: 0,
+            poolMisses: 0
+        };
+        
+        // Batch rendering optimization
+        this.renderBatches = {
+            trail: [],
+            explosion: [],
+            sparkle: [],
+            confetti: []
+        };
+    }
+    
+    // Initialize object pool with pre-created particles
+    initializePool() {
+        for (let i = 0; i < this.poolSize; i++) {
+            this.particlePool.push(new Particle(0, 0, 0, 0, 0, '#FFFFFF', 'trail'));
+        }
+    }
+    
+    // Get particle from pool or create new one if pool is empty
+    getParticleFromPool() {
+        if (this.particlePool.length > 0) {
+            this.performanceStats.poolHits++;
+            return this.particlePool.pop();
+        } else {
+            this.performanceStats.poolMisses++;
+            return new Particle(0, 0, 0, 0, 0, '#FFFFFF', 'trail');
+        }
+    }
+    
+    // Return particle to pool for reuse
+    returnParticleToPool(particle) {
+        if (this.particlePool.length < this.poolSize) {
+            // Reset particle properties for reuse
+            particle.life = 0;
+            particle.alpha = 1.0;
+            this.particlePool.push(particle);
+        }
+    }
+    
+    // Monitor performance and adjust particle limits dynamically
+    updatePerformanceStats() {
+        this.performanceStats.frameCount++;
+        const now = Date.now();
+        
+        if (now - this.performanceStats.lastFPSCheck >= 1000) {
+            this.performanceStats.currentFPS = this.performanceStats.frameCount;
+            this.performanceStats.frameCount = 0;
+            this.performanceStats.lastFPSCheck = now;
+            
+            // Dynamic particle limit adjustment based on performance
+            if (this.performanceStats.currentFPS < 45) {
+                // Reduce particle limit if FPS drops below 45
+                this.maxParticles = Math.max(100, this.maxParticles - 20);
+                console.log(`Performance optimization: Reduced particle limit to ${this.maxParticles} (FPS: ${this.performanceStats.currentFPS})`);
+            } else if (this.performanceStats.currentFPS > 55 && this.maxParticles < 200) {
+                // Increase particle limit if FPS is good and we're below default
+                this.maxParticles = Math.min(200, this.maxParticles + 10);
+                console.log(`Performance optimization: Increased particle limit to ${this.maxParticles} (FPS: ${this.performanceStats.currentFPS})`);
+            }
+            
+            // Log performance stats occasionally
+            if (this.performanceStats.frameCount % 300 === 0) {
+                console.log(`Particle System Performance: FPS=${this.performanceStats.currentFPS}, Active=${this.particles.length}, Pool Hits=${this.performanceStats.poolHits}, Pool Misses=${this.performanceStats.poolMisses}`);
+            }
+        }
     }
     
     createTrailParticle(x, y, velocityX, velocityY) {
         if (this.particles.length >= this.maxParticles) return;
         
+        // Use object pooling for performance
+        const particle = this.getParticleFromPool();
+        
         // Create trail particle with Kiro brand colors
         const colors = ['#FF8C00', '#FFA500', '#FFB84D'];
         const color = colors[Math.floor(Math.random() * colors.length)];
         
-        const particle = new Particle(
-            x + Math.random() * 8 - 4, // Small random offset
-            y + Math.random() * 8 - 4,
-            velocityX * 0.3 + (Math.random() - 0.5) * 2, // Inherit some velocity
-            velocityY * 0.3 + (Math.random() - 0.5) * 2,
-            1000 + Math.random() * 500, // Life in milliseconds
-            color,
-            'trail',
-            2 + Math.random() * 2 // Size variation
-        );
+        // Reinitialize pooled particle
+        particle.x = x + Math.random() * 8 - 4; // Small random offset
+        particle.y = y + Math.random() * 8 - 4;
+        particle.velocityX = velocityX * 0.3 + (Math.random() - 0.5) * 2; // Inherit some velocity
+        particle.velocityY = velocityY * 0.3 + (Math.random() - 0.5) * 2;
+        particle.life = 1000 + Math.random() * 500; // Life in milliseconds
+        particle.maxLife = particle.life;
+        particle.color = color;
+        particle.type = 'trail';
+        particle.size = 2 + Math.random() * 2; // Size variation
+        particle.alpha = 1.0;
         
         this.particles.push(particle);
+        this.performanceStats.particleCreationCount++;
     }
     
     createExplosionParticles(x, y, count, colors = ['#FF8C00', '#FFA500', '#FFB84D']) {
-        for (let i = 0; i < count && this.particles.length < this.maxParticles; i++) {
-            const angle = (Math.PI * 2 * i) / count + Math.random() * 0.5;
+        // Limit particle creation based on current performance
+        const actualCount = Math.min(count, this.maxParticles - this.particles.length);
+        
+        for (let i = 0; i < actualCount; i++) {
+            const particle = this.getParticleFromPool();
+            
+            const angle = (Math.PI * 2 * i) / actualCount + Math.random() * 0.5;
             const speed = 3 + Math.random() * 4;
             
-            const particle = new Particle(
-                x,
-                y,
-                Math.cos(angle) * speed, // Outward motion
-                Math.sin(angle) * speed,
-                800 + Math.random() * 400, // Life in milliseconds
-                colors[Math.floor(Math.random() * colors.length)],
-                'explosion',
-                3 + Math.random() * 3
-            );
+            // Reinitialize pooled particle
+            particle.x = x;
+            particle.y = y;
+            particle.velocityX = Math.cos(angle) * speed; // Outward motion
+            particle.velocityY = Math.sin(angle) * speed;
+            particle.life = 800 + Math.random() * 400; // Life in milliseconds
+            particle.maxLife = particle.life;
+            particle.color = colors[Math.floor(Math.random() * colors.length)];
+            particle.type = 'explosion';
+            particle.size = 3 + Math.random() * 3;
+            particle.alpha = 1.0;
             
             this.particles.push(particle);
+            this.performanceStats.particleCreationCount++;
         }
     }
     
     createSparkleParticles(x, y, count) {
-        const sparkleColors = ['#FFFFFF', '#FFD700', '#FFFF00', '#FFA500'];
+        // Use bright, contrasting colors for visibility as specified in requirements
+        const sparkleColors = ['#FFFFFF', '#FFD700', '#FFFF00', '#00FFFF', '#FF00FF', '#00FF00'];
         
-        for (let i = 0; i < count && this.particles.length < this.maxParticles; i++) {
-            const particle = new Particle(
-                x + (Math.random() - 0.5) * 20,
-                y + (Math.random() - 0.5) * 20,
-                (Math.random() - 0.5) * 2, // Gentle floating motion
-                -Math.random() * 2 - 1, // Upward motion
-                1500 + Math.random() * 1000, // Longer life for sparkles
-                sparkleColors[Math.floor(Math.random() * sparkleColors.length)],
-                'sparkle',
-                2 + Math.random() * 2
-            );
+        // Limit particle creation based on current performance
+        const actualCount = Math.min(count, this.maxParticles - this.particles.length);
+        
+        for (let i = 0; i < actualCount; i++) {
+            const particle = this.getParticleFromPool();
+            
+            // Reinitialize pooled particle
+            particle.x = x + (Math.random() - 0.5) * 30; // Wider spread for better visibility
+            particle.y = y + (Math.random() - 0.5) * 30;
+            particle.velocityX = (Math.random() - 0.5) * 1.5; // Gentle floating motion
+            particle.velocityY = -Math.random() * 1.5 - 0.5; // Gentle upward motion
+            particle.life = 2000 + Math.random() * 1500; // Longer life for sparkles to be more visible
+            particle.maxLife = particle.life;
+            particle.color = sparkleColors[Math.floor(Math.random() * sparkleColors.length)];
+            particle.type = 'sparkle';
+            particle.size = 3 + Math.random() * 3; // Larger size for better visibility
+            particle.alpha = 1.0;
+            
+            // Add twinkling properties for animation
+            particle.twinkleSpeed = 0.05 + Math.random() * 0.1;
+            particle.twinkleOffset = Math.random() * Math.PI * 2;
             
             this.particles.push(particle);
+            this.performanceStats.particleCreationCount++;
         }
     }
     
     createConfettiParticles(x, y, count, colors = ['#FF8C00', '#FFA500', '#FFB84D', '#FFFFFF']) {
-        for (let i = 0; i < count && this.particles.length < this.maxParticles; i++) {
+        // Limit particle creation based on current performance
+        const actualCount = Math.min(count, this.maxParticles - this.particles.length);
+        
+        for (let i = 0; i < actualCount; i++) {
+            const particle = this.getParticleFromPool();
+            
             const angle = Math.random() * Math.PI * 2;
             const speed = 2 + Math.random() * 5;
             
-            const particle = new Particle(
-                x,
-                y,
-                Math.cos(angle) * speed,
-                Math.sin(angle) * speed - 3, // Initial upward motion
-                2000 + Math.random() * 1000, // Long life for celebration
-                colors[Math.floor(Math.random() * colors.length)],
-                'confetti',
-                4 + Math.random() * 4
-            );
+            // Reinitialize pooled particle
+            particle.x = x;
+            particle.y = y;
+            particle.velocityX = Math.cos(angle) * speed;
+            particle.velocityY = Math.sin(angle) * speed - 3; // Initial upward motion
+            particle.life = 2000 + Math.random() * 1000; // Long life for celebration
+            particle.maxLife = particle.life;
+            particle.color = colors[Math.floor(Math.random() * colors.length)];
+            particle.type = 'confetti';
+            particle.size = 4 + Math.random() * 4;
+            particle.alpha = 1.0;
             
             this.particles.push(particle);
+            this.performanceStats.particleCreationCount++;
         }
     }
     
     update(deltaTime) {
+        // Update performance monitoring
+        this.updatePerformanceStats();
+        
         // Update all particles
         for (let i = 0; i < this.particles.length; i++) {
             this.particles[i].update(deltaTime);
         }
         
-        // Remove dead particles for memory management
+        // Remove dead particles for memory management and return to pool
         this.cleanup();
     }
     
@@ -215,17 +339,98 @@ class ParticleSystem {
         // Apply camera transform for world-space particles
         ctx.translate(-camera.x, -camera.y);
         
-        // Render all particles
+        // Batch particles by type for optimized rendering
+        this.prepareBatchedRendering();
+        
+        // Render particles in batches for better performance
+        // First render non-sparkle particles in batches
+        this.renderBatch(ctx, 'trail');
+        this.renderBatch(ctx, 'explosion');
+        this.renderBatch(ctx, 'confetti');
+        
+        // Then render sparkle particles above other particles for prominence (requirement 5.5)
+        this.renderBatch(ctx, 'sparkle');
+        
+        ctx.restore();
+    }
+    
+    // Prepare particles for batched rendering
+    prepareBatchedRendering() {
+        // Clear previous batches
+        this.renderBatches.trail.length = 0;
+        this.renderBatches.explosion.length = 0;
+        this.renderBatches.sparkle.length = 0;
+        this.renderBatches.confetti.length = 0;
+        
+        // Sort particles into batches by type
         for (let particle of this.particles) {
-            particle.render(ctx);
+            if (!particle.isDead() && this.renderBatches[particle.type]) {
+                this.renderBatches[particle.type].push(particle);
+            }
+        }
+    }
+    
+    // Render a batch of particles of the same type for optimization
+    renderBatch(ctx, type) {
+        const batch = this.renderBatches[type];
+        if (batch.length === 0) return;
+        
+        // Optimize rendering by setting common properties once per batch
+        ctx.save();
+        
+        switch (type) {
+            case 'trail':
+                // Batch render trail particles as circles
+                for (let particle of batch) {
+                    ctx.globalAlpha = particle.alpha;
+                    ctx.fillStyle = particle.color;
+                    ctx.beginPath();
+                    ctx.arc(particle.x, particle.y, particle.size, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+                break;
+                
+            case 'explosion':
+                // Batch render explosion particles as squares
+                for (let particle of batch) {
+                    ctx.globalAlpha = particle.alpha;
+                    ctx.fillStyle = particle.color;
+                    ctx.fillRect(particle.x - particle.size/2, particle.y - particle.size/2, particle.size, particle.size);
+                }
+                break;
+                
+            case 'sparkle':
+                // Render sparkle particles individually due to complex star shape
+                for (let particle of batch) {
+                    particle.render(ctx);
+                }
+                break;
+                
+            case 'confetti':
+                // Render confetti particles individually due to rotation
+                for (let particle of batch) {
+                    particle.render(ctx);
+                }
+                break;
         }
         
         ctx.restore();
     }
     
     cleanup() {
-        // Remove dead particles to prevent memory leaks
-        this.particles = this.particles.filter(particle => !particle.isDead());
+        // Remove dead particles and return them to pool for reuse
+        const aliveParticles = [];
+        
+        for (let particle of this.particles) {
+            if (particle.isDead()) {
+                // Return dead particle to pool for reuse
+                this.returnParticleToPool(particle);
+            } else {
+                aliveParticles.push(particle);
+            }
+        }
+        
+        this.particles = aliveParticles;
     }
     
     // Get current particle count for debugging/performance monitoring
@@ -235,7 +440,57 @@ class ParticleSystem {
     
     // Clear all particles (useful for level transitions)
     clear() {
+        // Return all particles to pool before clearing
+        for (let particle of this.particles) {
+            this.returnParticleToPool(particle);
+        }
         this.particles = [];
+    }
+    
+    // Get performance statistics for monitoring
+    getPerformanceStats() {
+        return {
+            ...this.performanceStats,
+            activeParticles: this.particles.length,
+            poolSize: this.particlePool.length,
+            maxParticles: this.maxParticles,
+            poolUtilization: ((this.poolSize - this.particlePool.length) / this.poolSize * 100).toFixed(1) + '%'
+        };
+    }
+    
+    // Force performance optimization by reducing particle count
+    optimizePerformance() {
+        if (this.particles.length > this.maxParticles * 0.8) {
+            // Remove oldest particles first (they're likely to expire soon anyway)
+            const particlesToRemove = Math.floor(this.particles.length * 0.2);
+            
+            for (let i = 0; i < particlesToRemove; i++) {
+                const particle = this.particles.shift();
+                if (particle) {
+                    this.returnParticleToPool(particle);
+                }
+            }
+            
+            console.log(`Performance optimization: Removed ${particlesToRemove} particles`);
+        }
+    }
+    
+    // Test performance under high particle loads
+    stressTest(duration = 5000) {
+        console.log('Starting particle system stress test...');
+        const startTime = Date.now();
+        const testInterval = setInterval(() => {
+            // Create many particles to test performance
+            this.createExplosionParticles(400, 300, 20, ['#FF0000', '#00FF00', '#0000FF']);
+            this.createTrailParticle(400, 300, Math.random() * 10 - 5, Math.random() * 10 - 5);
+            this.createSparkleParticles(400, 300, 5);
+            
+            const elapsed = Date.now() - startTime;
+            if (elapsed >= duration) {
+                clearInterval(testInterval);
+                console.log('Stress test completed. Performance stats:', this.getPerformanceStats());
+            }
+        }, 16); // ~60 FPS
     }
 }
 
@@ -475,12 +730,13 @@ class AssetManager {
             ctx.strokeStyle = '#FFA500';
             ctx.lineWidth = 2;
             ctx.strokeRect(x, y, width, height);
-            return;
+            return { rendered: 'fallback', x, y, width, height };
         }
         
         if (asset.fallback) {
             // Use custom fallback renderer
             asset.renderer(ctx, x, y, width, height);
+            return { rendered: 'fallback', x, y, width, height };
         } else {
             // Render actual image with proper scaling and aspect ratio preservation
             if (maintainAspectRatio) {
@@ -503,9 +759,27 @@ class AssetManager {
                 }
                 
                 ctx.drawImage(asset, renderX, renderY, renderWidth, renderHeight);
+                return { 
+                    rendered: 'sprite', 
+                    x: renderX, 
+                    y: renderY, 
+                    width: renderWidth, 
+                    height: renderHeight,
+                    aspectRatio: renderWidth / renderHeight,
+                    originalAspectRatio: imgAspectRatio
+                };
             } else {
                 // Stretch to fit exact dimensions
                 ctx.drawImage(asset, x, y, width, height);
+                return { 
+                    rendered: 'sprite', 
+                    x, 
+                    y, 
+                    width, 
+                    height,
+                    aspectRatio: width / height,
+                    originalAspectRatio: asset.width / asset.height
+                };
             }
         }
     }
@@ -542,6 +816,14 @@ class Game {
         
         // Initialize particle system
         this.particleSystem = new ParticleSystem(this.ctx);
+        
+        // Confetti celebration state
+        this.confettiCelebration = {
+            active: false,
+            duration: 3000, // 3 seconds celebration duration
+            startTime: 0,
+            confettiCount: 50 // Number of confetti particles to create
+        };
         
         // Retrieve and display stored high score on game start
         this.highScore = this.scorePersistence.getHighScore();
@@ -671,6 +953,24 @@ class Game {
         // Level goal (flag)
         this.goal = { x: 1400, y: 100, width: 32, height: 50 };
         
+        // Obstacle areas for sparkle effects (designated areas that trigger sparkles when player passes through)
+        this.obstacleAreas = [
+            // Narrow passages between platforms
+            { x: 300, y: 450, width: 100, height: 100, name: 'gap1' },
+            { x: 600, y: 350, width: 150, height: 150, name: 'gap2' },
+            { x: 850, y: 250, width: 100, height: 200, name: 'gap3' },
+            { x: 1050, y: 200, width: 150, height: 100, name: 'gap4' },
+            { x: 1350, y: 150, width: 100, height: 150, name: 'gap5' },
+            
+            // Challenging navigation areas around floating platforms
+            { x: 450, y: 380, width: 200, height: 70, name: 'challenge1' },
+            { x: 750, y: 280, width: 200, height: 120, name: 'challenge2' },
+            { x: 1150, y: 180, width: 250, height: 120, name: 'challenge3' }
+        ];
+        
+        // Track which obstacle areas player is currently in for sparkle generation
+        this.playerInObstacleAreas = new Set();
+        
         // Level boundaries
         this.levelWidth = 1600;
         this.levelHeight = 600;
@@ -683,17 +983,32 @@ class Game {
         this.updatePlayer();
         this.updateCamera();
         this.checkCollisions();
+        this.checkObstacleAreas();
         this.checkGoal();
         this.updateUI();
         
         // Update particle system with delta time (assuming 60 FPS = ~16.67ms per frame)
         this.particleSystem.update(16.67);
         
-        // Debug: Log particle count occasionally (every 60 frames = ~1 second)
+        // Update confetti celebration system
+        this.updateConfettiCelebration();
+        
+        // Performance monitoring and optimization
         if (this.debugFrameCount === undefined) this.debugFrameCount = 0;
         this.debugFrameCount++;
-        if (this.debugFrameCount % 60 === 0 && this.particleSystem.getParticleCount() > 0) {
-            console.log(`Particle system active: ${this.particleSystem.getParticleCount()} particles`);
+        
+        // Log performance stats occasionally (every 300 frames = ~5 seconds)
+        if (this.debugFrameCount % 300 === 0 && this.particleSystem.getParticleCount() > 0) {
+            const stats = this.particleSystem.getPerformanceStats();
+            console.log(`Particle Performance: FPS=${stats.currentFPS}, Active=${stats.activeParticles}/${stats.maxParticles}, Pool=${stats.poolUtilization}`);
+        }
+        
+        // Automatic performance optimization if needed
+        if (this.debugFrameCount % 120 === 0) { // Check every 2 seconds
+            const stats = this.particleSystem.getPerformanceStats();
+            if (stats.currentFPS < 50 && stats.activeParticles > stats.maxParticles * 0.8) {
+                this.particleSystem.optimizePerformance();
+            }
         }
     }
     
@@ -744,20 +1059,39 @@ class Game {
         // Movement detection for trail triggering
         const isMoving = Math.abs(this.player.velocityX) > 0.5 || Math.abs(this.player.velocityY) > 0.5;
         
-        // Generate trail particles when player is moving
+        // Generate trail particles when player is moving with improved timing
         if (isMoving) {
-            // Create trail particles behind the character with Kiro brand colors
-            // Generate particles at the center-back of the player sprite
-            const trailX = this.player.x + this.player.width / 2;
-            const trailY = this.player.y + this.player.height / 2;
+            // Throttle trail generation based on movement intensity for better performance and visual appeal
+            const movementIntensity = Math.sqrt(this.player.velocityX * this.player.velocityX + this.player.velocityY * this.player.velocityY);
+            const trailFrequency = Math.min(1.0, movementIntensity / 3); // Scale with movement speed
             
-            // Create trail particle with inherited velocity for natural movement
-            this.particleSystem.createTrailParticle(
-                trailX, 
-                trailY, 
-                this.player.velocityX, 
-                this.player.velocityY
-            );
+            // Use frame-based timing for consistent trail generation
+            if (!this.trailTimer) this.trailTimer = 0;
+            this.trailTimer += trailFrequency;
+            
+            if (this.trailTimer >= 1.0) {
+                this.trailTimer = 0;
+                
+                // Generate particles at multiple points for richer trail effect
+                const numTrailPoints = Math.ceil(movementIntensity / 2);
+                for (let i = 0; i < numTrailPoints; i++) {
+                    const offsetX = (Math.random() - 0.5) * this.player.width * 0.8;
+                    const offsetY = (Math.random() - 0.5) * this.player.height * 0.8;
+                    const trailX = this.player.x + this.player.width / 2 + offsetX;
+                    const trailY = this.player.y + this.player.height / 2 + offsetY;
+                    
+                    // Create trail particle with inherited velocity and slight randomization
+                    this.particleSystem.createTrailParticle(
+                        trailX, 
+                        trailY, 
+                        this.player.velocityX + (Math.random() - 0.5) * 2, 
+                        this.player.velocityY + (Math.random() - 0.5) * 2
+                    );
+                }
+            }
+        } else {
+            // Reset trail timer when not moving
+            this.trailTimer = 0;
         }
         
         // Keep player within level bounds
@@ -789,9 +1123,26 @@ class Game {
     checkCollisions() {
         this.player.onGround = false;
         
-        // Platform collisions
+        // Platform collisions with explosion effects
         for (let platform of this.platforms) {
             if (this.isColliding(this.player, platform)) {
+                // Calculate collision point for explosion effect
+                const overlapLeft = Math.max(this.player.x, platform.x);
+                const overlapRight = Math.min(this.player.x + this.player.width, platform.x + platform.width);
+                const overlapTop = Math.max(this.player.y, platform.y);
+                const overlapBottom = Math.min(this.player.y + this.player.height, platform.y + platform.height);
+                
+                const collisionX = (overlapLeft + overlapRight) / 2;
+                const collisionY = (overlapTop + overlapBottom) / 2;
+                
+                // Generate explosion particles at collision point for platform collisions
+                this.particleSystem.createExplosionParticles(
+                    collisionX, 
+                    collisionY, 
+                    8, // Particle count for platform collisions
+                    ['#FF8C00', '#FFA500', '#FFB84D', '#FFFFFF'] // Platform collision colors
+                );
+                
                 // Top collision (landing on platform)
                 if (this.player.velocityY > 0 && 
                     this.player.y < platform.y) {
@@ -816,23 +1167,121 @@ class Game {
             }
         }
         
-        // Collectible collisions
+        // Collectible collisions with distinct explosion effects
         for (let collectible of this.collectibles) {
             if (!collectible.collected && this.isColliding(this.player, collectible)) {
                 collectible.collected = true;
                 this.score += 100;
+                
+                // Create distinct explosion effects for collectible collisions
+                const collectibleCenterX = collectible.x + collectible.width / 2;
+                const collectibleCenterY = collectible.y + collectible.height / 2;
+                
+                this.particleSystem.createExplosionParticles(
+                    collectibleCenterX, 
+                    collectibleCenterY, 
+                    12, // More particles for collectibles to make them feel more rewarding
+                    ['#FFB84D', '#FFD700', '#FFFF00', '#FFA500'] // Bright, golden colors for collectibles
+                );
             }
         }
         
-        // Power-up collisions
+        // Power-up collisions with special explosion effects
         for (let powerUp of this.powerUps) {
             if (!powerUp.collected && this.isColliding(this.player, powerUp)) {
                 powerUp.collected = true;
                 this.handlePowerUp(powerUp.type);
+                
+                // Create special explosion effects for power-up collisions
+                const powerUpCenterX = powerUp.x + powerUp.width / 2;
+                const powerUpCenterY = powerUp.y + powerUp.height / 2;
+                
+                // Different colors based on power-up type
+                let powerUpColors;
+                switch(powerUp.type) {
+                    case 'speed':
+                        powerUpColors = ['#00FFFF', '#00CCFF', '#0099FF', '#FFFFFF']; // Cyan variants
+                        break;
+                    case 'life':
+                        powerUpColors = ['#FF0080', '#FF3399', '#FF66B2', '#FFFFFF']; // Pink variants
+                        break;
+                    case 'score':
+                        powerUpColors = ['#FFFF00', '#FFD700', '#FFA500', '#FFFFFF']; // Yellow variants
+                        break;
+                    default:
+                        powerUpColors = ['#FF8C00', '#FFA500', '#FFB84D', '#FFFFFF'];
+                }
+                
+                this.particleSystem.createExplosionParticles(
+                    powerUpCenterX, 
+                    powerUpCenterY, 
+                    15, // Even more particles for power-ups to emphasize their importance
+                    powerUpColors
+                );
             }
         }
     }
     
+    checkObstacleAreas() {
+        // Check which obstacle areas the player is currently in
+        const currentAreas = new Set();
+        
+        for (let area of this.obstacleAreas) {
+            if (this.isColliding(this.player, area)) {
+                currentAreas.add(area.name);
+                
+                // If player just entered this area, start generating sparkles
+                if (!this.playerInObstacleAreas.has(area.name)) {
+                    console.log(`Player entered obstacle area: ${area.name}`);
+                }
+                
+                // Generate sparkle particles while player is in the area with improved timing
+                // Create sparkles at strategic positions for better visual distribution
+                if (!this.sparkleTimers) this.sparkleTimers = new Map();
+                if (!this.sparkleTimers.has(area.name)) this.sparkleTimers.set(area.name, 0);
+                
+                let sparkleTimer = this.sparkleTimers.get(area.name);
+                sparkleTimer += 1;
+                
+                // Generate sparkles with improved timing and positioning
+                if (sparkleTimer >= 8) { // Every 8 frames for consistent timing
+                    sparkleTimer = 0;
+                    
+                    // Create sparkles in a pattern around the player for better visual effect
+                    const playerCenterX = this.player.x + this.player.width / 2;
+                    const playerCenterY = this.player.y + this.player.height / 2;
+                    
+                    for (let i = 0; i < 3; i++) {
+                        const angle = (Math.PI * 2 * i) / 3 + Date.now() * 0.001;
+                        const radius = 20 + Math.sin(Date.now() * 0.003 + i) * 10;
+                        const sparkleX = Math.max(area.x, Math.min(area.x + area.width, 
+                            playerCenterX + Math.cos(angle) * radius));
+                        const sparkleY = Math.max(area.y, Math.min(area.y + area.height, 
+                            playerCenterY + Math.sin(angle) * radius));
+                        
+                        this.particleSystem.createSparkleParticles(sparkleX, sparkleY, 1);
+                    }
+                }
+                
+                this.sparkleTimers.set(area.name, sparkleTimer);
+            }
+        }
+        
+        // Check for areas the player just exited
+        for (let areaName of this.playerInObstacleAreas) {
+            if (!currentAreas.has(areaName)) {
+                console.log(`Player exited obstacle area: ${areaName}`);
+                // Clean up sparkle timer for exited area
+                if (this.sparkleTimers && this.sparkleTimers.has(areaName)) {
+                    this.sparkleTimers.delete(areaName);
+                }
+            }
+        }
+        
+        // Update the current areas set
+        this.playerInObstacleAreas = currentAreas;
+    }
+
     checkGoal() {
         if (this.isColliding(this.player, this.goal)) {
             this.levelComplete = true;
@@ -841,10 +1290,11 @@ class Game {
             // Store current score to localStorage immediately on level completion
             this.scorePersistence.saveScore(this.score);
             
-            // Update high score if current score is higher
+            // Update high score if current score is higher and trigger confetti celebration
             if (this.scorePersistence.saveHighScore(this.score)) {
                 this.highScore = this.score;
                 console.log('New high score achieved!');
+                this.triggerConfettiCelebration();
             }
         }
     }
@@ -879,10 +1329,11 @@ class Game {
             // Store current score to localStorage immediately on game over
             this.scorePersistence.saveScore(this.score);
             
-            // Update high score if current score is higher
+            // Update high score if current score is higher and trigger confetti celebration
             if (this.scorePersistence.saveHighScore(this.score)) {
                 this.highScore = this.score;
                 console.log('New high score achieved!');
+                this.triggerConfettiCelebration();
             }
         } else {
             // Reset player position
@@ -908,55 +1359,263 @@ class Game {
         this.ctx.save();
         this.ctx.translate(-this.camera.x, -this.camera.y);
         
-        // Draw platforms
-        this.ctx.fillStyle = '#444';
+        // Draw platforms with enhanced visual polish
         for (let platform of this.platforms) {
+            // Create gradient for depth effect
+            const gradient = this.ctx.createLinearGradient(platform.x, platform.y, platform.x, platform.y + platform.height);
+            gradient.addColorStop(0, '#555');
+            gradient.addColorStop(0.3, '#444');
+            gradient.addColorStop(1, '#333');
+            
+            this.ctx.fillStyle = gradient;
             this.ctx.fillRect(platform.x, platform.y, platform.width, platform.height);
-            // Platform border
-            this.ctx.strokeStyle = '#666';
-            this.ctx.lineWidth = 2;
+            
+            // Enhanced border with multiple layers for depth
+            this.ctx.strokeStyle = '#777';
+            this.ctx.lineWidth = 1;
             this.ctx.strokeRect(platform.x, platform.y, platform.width, platform.height);
+            
+            // Top highlight for 3D effect
+            this.ctx.strokeStyle = '#888';
+            this.ctx.lineWidth = 2;
+            this.ctx.beginPath();
+            this.ctx.moveTo(platform.x, platform.y);
+            this.ctx.lineTo(platform.x + platform.width, platform.y);
+            this.ctx.stroke();
+            
+            // Bottom shadow for depth
+            this.ctx.strokeStyle = '#222';
+            this.ctx.lineWidth = 1;
+            this.ctx.beginPath();
+            this.ctx.moveTo(platform.x, platform.y + platform.height);
+            this.ctx.lineTo(platform.x + platform.width, platform.y + platform.height);
+            this.ctx.stroke();
+            
+            // Add subtle texture pattern
+            this.ctx.fillStyle = 'rgba(255, 255, 255, 0.05)';
+            for (let i = 0; i < platform.width; i += 8) {
+                for (let j = 0; j < platform.height; j += 8) {
+                    if ((i + j) % 16 === 0) {
+                        this.ctx.fillRect(platform.x + i, platform.y + j, 2, 2);
+                    }
+                }
+            }
         }
         
-        // Draw collectibles (gems)
+        // Draw collectibles (gems) with enhanced visual polish
         for (let collectible of this.collectibles) {
             if (!collectible.collected) {
-                this.ctx.fillStyle = '#FFB84D';
-                this.ctx.fillRect(collectible.x, collectible.y, collectible.width, collectible.height);
-                // Gem sparkle effect
-                this.ctx.strokeStyle = '#FF8C00';
+                // Add pulsing animation to gems
+                const time = Date.now() * 0.003;
+                const pulseScale = 1 + Math.sin(time + collectible.x * 0.01) * 0.1;
+                const glowIntensity = 0.5 + Math.sin(time * 2 + collectible.y * 0.01) * 0.3;
+                
+                this.ctx.save();
+                this.ctx.translate(collectible.x + collectible.width/2, collectible.y + collectible.height/2);
+                this.ctx.scale(pulseScale, pulseScale);
+                
+                // Draw gem with gradient effect
+                const gradient = this.ctx.createRadialGradient(0, 0, 0, 0, 0, collectible.width/2);
+                gradient.addColorStop(0, '#FFD700');
+                gradient.addColorStop(0.7, '#FFB84D');
+                gradient.addColorStop(1, '#FF8C00');
+                
+                this.ctx.fillStyle = gradient;
+                this.ctx.fillRect(-collectible.width/2, -collectible.height/2, collectible.width, collectible.height);
+                
+                // Enhanced sparkle effect with animated glow
+                this.ctx.strokeStyle = `rgba(255, 215, 0, ${glowIntensity})`;
+                this.ctx.lineWidth = 2;
+                this.ctx.strokeRect(-collectible.width/2 - 3, -collectible.height/2 - 3, collectible.width + 6, collectible.height + 6);
+                
+                // Add rotating sparkle points
+                this.ctx.strokeStyle = '#FFFFFF';
                 this.ctx.lineWidth = 1;
-                this.ctx.strokeRect(collectible.x - 2, collectible.y - 2, collectible.width + 4, collectible.height + 4);
+                for (let i = 0; i < 4; i++) {
+                    const angle = time + i * Math.PI / 2;
+                    const sparkleX = Math.cos(angle) * (collectible.width/2 + 5);
+                    const sparkleY = Math.sin(angle) * (collectible.height/2 + 5);
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(sparkleX - 2, sparkleY);
+                    this.ctx.lineTo(sparkleX + 2, sparkleY);
+                    this.ctx.moveTo(sparkleX, sparkleY - 2);
+                    this.ctx.lineTo(sparkleX, sparkleY + 2);
+                    this.ctx.stroke();
+                }
+                
+                this.ctx.restore();
             }
         }
         
-        // Draw power-ups
+        // Draw power-ups with enhanced visual effects
         for (let powerUp of this.powerUps) {
             if (!powerUp.collected) {
+                const time = Date.now() * 0.004;
+                const floatOffset = Math.sin(time + powerUp.x * 0.02) * 3;
+                const rotationAngle = time * 0.5;
+                const pulseScale = 1 + Math.sin(time * 3) * 0.15;
+                
+                this.ctx.save();
+                this.ctx.translate(powerUp.x + powerUp.width/2, powerUp.y + powerUp.height/2 + floatOffset);
+                this.ctx.rotate(rotationAngle);
+                this.ctx.scale(pulseScale, pulseScale);
+                
+                // Enhanced power-up rendering with gradients and effects
+                let gradient, glowColor;
                 switch(powerUp.type) {
                     case 'speed':
-                        this.ctx.fillStyle = '#00FFFF'; // Cyan for speed
+                        gradient = this.ctx.createRadialGradient(0, 0, 0, 0, 0, powerUp.width/2);
+                        gradient.addColorStop(0, '#FFFFFF');
+                        gradient.addColorStop(0.5, '#00FFFF');
+                        gradient.addColorStop(1, '#0088CC');
+                        glowColor = '#00FFFF';
                         break;
                     case 'life':
-                        this.ctx.fillStyle = '#FF0080'; // Pink for life
+                        gradient = this.ctx.createRadialGradient(0, 0, 0, 0, 0, powerUp.width/2);
+                        gradient.addColorStop(0, '#FFFFFF');
+                        gradient.addColorStop(0.5, '#FF0080');
+                        gradient.addColorStop(1, '#CC0066');
+                        glowColor = '#FF0080';
                         break;
                     case 'score':
-                        this.ctx.fillStyle = '#FFFF00'; // Yellow for score
+                        gradient = this.ctx.createRadialGradient(0, 0, 0, 0, 0, powerUp.width/2);
+                        gradient.addColorStop(0, '#FFFFFF');
+                        gradient.addColorStop(0.5, '#FFFF00');
+                        gradient.addColorStop(1, '#CCCC00');
+                        glowColor = '#FFFF00';
                         break;
                 }
-                this.ctx.fillRect(powerUp.x, powerUp.y, powerUp.width, powerUp.height);
-                // Power-up glow effect
-                this.ctx.strokeStyle = '#FFFFFF';
-                this.ctx.lineWidth = 2;
-                this.ctx.strokeRect(powerUp.x - 3, powerUp.y - 3, powerUp.width + 6, powerUp.height + 6);
+                
+                this.ctx.fillStyle = gradient;
+                this.ctx.fillRect(-powerUp.width/2, -powerUp.height/2, powerUp.width, powerUp.height);
+                
+                // Animated glow effect
+                const glowIntensity = 0.6 + Math.sin(time * 4) * 0.4;
+                this.ctx.strokeStyle = `rgba(${this.hexToRgb(glowColor)}, ${glowIntensity})`;
+                this.ctx.lineWidth = 3;
+                this.ctx.strokeRect(-powerUp.width/2 - 4, -powerUp.height/2 - 4, powerUp.width + 8, powerUp.height + 8);
+                
+                // Add energy particles around power-ups
+                for (let i = 0; i < 6; i++) {
+                    const particleAngle = time * 2 + i * Math.PI / 3;
+                    const particleRadius = powerUp.width/2 + 8 + Math.sin(time * 3 + i) * 3;
+                    const particleX = Math.cos(particleAngle) * particleRadius;
+                    const particleY = Math.sin(particleAngle) * particleRadius;
+                    
+                    this.ctx.fillStyle = glowColor;
+                    this.ctx.beginPath();
+                    this.ctx.arc(particleX, particleY, 1.5, 0, Math.PI * 2);
+                    this.ctx.fill();
+                }
+                
+                this.ctx.restore();
             }
         }
         
-        // Draw goal flag
-        this.ctx.fillStyle = '#00FF00';
-        this.ctx.fillRect(this.goal.x, this.goal.y, this.goal.width, this.goal.height);
-        this.ctx.fillStyle = '#FFB84D';
-        this.ctx.fillRect(this.goal.x + 5, this.goal.y + 5, 20, 15);
+        // Draw obstacle areas with enhanced magical visualization
+        const obstacleTime = Date.now() * 0.003;
+        for (let area of this.obstacleAreas) {
+            const isActive = this.playerInObstacleAreas.has(area.name);
+            
+            if (isActive) {
+                // Active area with magical shimmer effect
+                const shimmerAlpha = 0.2 + Math.sin(obstacleTime * 4) * 0.1;
+                const gradient = this.ctx.createRadialGradient(
+                    area.x + area.width/2, area.y + area.height/2, 0,
+                    area.x + area.width/2, area.y + area.height/2, Math.max(area.width, area.height)/2
+                );
+                gradient.addColorStop(0, `rgba(255, 255, 255, ${shimmerAlpha})`);
+                gradient.addColorStop(0.7, `rgba(200, 200, 255, ${shimmerAlpha * 0.5})`);
+                gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+                
+                this.ctx.fillStyle = gradient;
+                this.ctx.fillRect(area.x, area.y, area.width, area.height);
+                
+                // Animated border for active areas
+                this.ctx.strokeStyle = `rgba(255, 255, 255, ${0.5 + Math.sin(obstacleTime * 6) * 0.3})`;
+                this.ctx.lineWidth = 2;
+                this.ctx.setLineDash([5, 5]);
+                this.ctx.lineDashOffset = -obstacleTime * 20;
+                this.ctx.strokeRect(area.x, area.y, area.width, area.height);
+                this.ctx.setLineDash([]);
+                
+                // Add floating magical particles
+                for (let i = 0; i < 3; i++) {
+                    const particleTime = obstacleTime + i * 2;
+                    const particleX = area.x + (Math.sin(particleTime) * 0.5 + 0.5) * area.width;
+                    const particleY = area.y + (Math.cos(particleTime * 0.7) * 0.5 + 0.5) * area.height;
+                    const particleAlpha = 0.4 + Math.sin(particleTime * 3) * 0.3;
+                    
+                    this.ctx.fillStyle = `rgba(200, 200, 255, ${particleAlpha})`;
+                    this.ctx.beginPath();
+                    this.ctx.arc(particleX, particleY, 1.5, 0, Math.PI * 2);
+                    this.ctx.fill();
+                }
+            } else {
+                // Inactive area with subtle indication
+                this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+                this.ctx.lineWidth = 1;
+                this.ctx.setLineDash([3, 3]);
+                this.ctx.strokeRect(area.x, area.y, area.width, area.height);
+                this.ctx.setLineDash([]);
+            }
+        }
+        
+        // Draw goal flag with enhanced animation and visual effects
+        const flagTime = Date.now() * 0.005;
+        const flagWave = Math.sin(flagTime * 2) * 2;
+        const flagGlow = 0.7 + Math.sin(flagTime * 3) * 0.3;
+        
+        // Flag pole with gradient
+        const poleGradient = this.ctx.createLinearGradient(this.goal.x, this.goal.y, this.goal.x + 5, this.goal.y);
+        poleGradient.addColorStop(0, '#228B22');
+        poleGradient.addColorStop(0.5, '#32CD32');
+        poleGradient.addColorStop(1, '#00FF00');
+        
+        this.ctx.fillStyle = poleGradient;
+        this.ctx.fillRect(this.goal.x, this.goal.y, 5, this.goal.height);
+        
+        // Animated flag with wave effect
+        this.ctx.save();
+        this.ctx.translate(this.goal.x + 5, this.goal.y + 5);
+        
+        // Flag gradient
+        const flagGradient = this.ctx.createLinearGradient(0, 0, 20, 0);
+        flagGradient.addColorStop(0, '#FFD700');
+        flagGradient.addColorStop(0.5, '#FFB84D');
+        flagGradient.addColorStop(1, '#FF8C00');
+        
+        this.ctx.fillStyle = flagGradient;
+        
+        // Draw waving flag using curves
+        this.ctx.beginPath();
+        this.ctx.moveTo(0, 0);
+        this.ctx.quadraticCurveTo(10 + flagWave, 7.5, 20, 0 + flagWave);
+        this.ctx.lineTo(20, 15 + flagWave);
+        this.ctx.quadraticCurveTo(10 + flagWave, 7.5, 0, 15);
+        this.ctx.closePath();
+        this.ctx.fill();
+        
+        // Flag border with glow effect
+        this.ctx.strokeStyle = `rgba(255, 215, 0, ${flagGlow})`;
+        this.ctx.lineWidth = 2;
+        this.ctx.stroke();
+        
+        this.ctx.restore();
+        
+        // Add victory sparkles around the flag
+        for (let i = 0; i < 8; i++) {
+            const sparkleAngle = flagTime + i * Math.PI / 4;
+            const sparkleRadius = 40 + Math.sin(flagTime * 2 + i) * 10;
+            const sparkleX = this.goal.x + this.goal.width/2 + Math.cos(sparkleAngle) * sparkleRadius;
+            const sparkleY = this.goal.y + this.goal.height/2 + Math.sin(sparkleAngle) * sparkleRadius;
+            const sparkleAlpha = 0.3 + Math.sin(flagTime * 4 + i) * 0.3;
+            
+            this.ctx.fillStyle = `rgba(255, 215, 0, ${sparkleAlpha})`;
+            this.ctx.beginPath();
+            this.ctx.arc(sparkleX, sparkleY, 2, 0, Math.PI * 2);
+            this.ctx.fill();
+        }
         
         // Draw player (Kiro) using AssetManager with aspect ratio preservation
         if (this.assetsLoaded) {
@@ -980,6 +1639,7 @@ class Game {
         }
         
         // Render particle system (particles should render above game objects but below UI)
+        // Sparkle particles will be rendered with prominence as specified in requirements
         this.particleSystem.render(this.ctx, this.camera);
         
         // Restore context
@@ -1060,11 +1720,82 @@ class Game {
         this.ctx.fillText(dots, this.width / 2, this.height / 2 + 50);
     }
     
+    triggerConfettiCelebration() {
+        // Trigger enhanced confetti celebration effect for new high score
+        this.confettiCelebration.active = true;
+        this.confettiCelebration.startTime = Date.now();
+        
+        // Create confetti particles with multiple Kiro brand colors
+        const confettiColors = ['#FF8C00', '#FFA500', '#FFB84D', '#FFFFFF', '#FFD700', '#32CD32', '#FF69B4'];
+        
+        // Create confetti in multiple waves for more dramatic effect
+        const createConfettiWave = (delay, intensity) => {
+            setTimeout(() => {
+                if (this.confettiCelebration.active) {
+                    const waveCount = Math.floor(this.confettiCelebration.confettiCount * intensity);
+                    
+                    for (let i = 0; i < waveCount; i++) {
+                        // Create confetti from multiple spawn points for better coverage
+                        const spawnPoints = [
+                            { x: this.camera.x + this.width * 0.2, y: this.camera.y },
+                            { x: this.camera.x + this.width * 0.5, y: this.camera.y },
+                            { x: this.camera.x + this.width * 0.8, y: this.camera.y }
+                        ];
+                        
+                        const spawnPoint = spawnPoints[i % spawnPoints.length];
+                        const confettiX = spawnPoint.x + (Math.random() - 0.5) * 100;
+                        const confettiY = spawnPoint.y + Math.random() * 50;
+                        
+                        this.particleSystem.createConfettiParticles(
+                            confettiX,
+                            confettiY,
+                            1,
+                            confettiColors
+                        );
+                    }
+                }
+            }, delay);
+        };
+        
+        // Create multiple waves of confetti for extended celebration
+        createConfettiWave(0, 0.4);      // Initial burst
+        createConfettiWave(200, 0.3);    // Second wave
+        createConfettiWave(500, 0.2);    // Third wave
+        createConfettiWave(1000, 0.1);   // Final wave
+        
+        console.log('Enhanced confetti celebration started!');
+    }
+    
+    updateConfettiCelebration() {
+        if (!this.confettiCelebration.active) return;
+        
+        const currentTime = Date.now();
+        const elapsed = currentTime - this.confettiCelebration.startTime;
+        
+        // Check if celebration duration has completed
+        if (elapsed >= this.confettiCelebration.duration) {
+            this.confettiCelebration.active = false;
+            
+            // Clear all confetti particles from the system after celebration completes
+            this.particleSystem.particles = this.particleSystem.particles.filter(
+                particle => particle.type !== 'confetti'
+            );
+            
+            console.log('Confetti celebration completed and cleaned up');
+        }
+    }
+    
     updateUI() {
         document.getElementById('score').textContent = this.score;
         document.getElementById('highScore').textContent = this.highScore;
         document.getElementById('lives').textContent = this.lives;
         document.getElementById('level').textContent = this.level;
+        
+        // Update performance stats in UI
+        const stats = this.particleSystem.getPerformanceStats();
+        document.getElementById('particleCount').textContent = stats.activeParticles;
+        document.getElementById('fps').textContent = stats.currentFPS;
+        document.getElementById('poolStats').textContent = stats.poolUtilization;
     }
     
     restart() {
@@ -1077,6 +1808,10 @@ class Game {
         
         // Clear all particles on restart for clean state
         this.particleSystem.clear();
+        
+        // Reset confetti celebration state
+        this.confettiCelebration.active = false;
+        this.confettiCelebration.startTime = 0;
         
         // Retrieve current high score on restart
         this.highScore = this.scorePersistence.getHighScore();
@@ -1093,12 +1828,56 @@ class Game {
         }
     }
     
+    // Performance testing methods for debugging and optimization
+    testParticlePerformance() {
+        console.log('Starting particle performance test...');
+        this.particleSystem.stressTest(3000);
+    }
+    
+    getPerformanceInfo() {
+        return this.particleSystem.getPerformanceStats();
+    }
+    
+    optimizeParticles() {
+        this.particleSystem.optimizePerformance();
+    }
+    
+    // Helper function for color conversion
+    hexToRgb(hex) {
+        const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+        if (result) {
+            const r = parseInt(result[1], 16);
+            const g = parseInt(result[2], 16);
+            const b = parseInt(result[3], 16);
+            return `${r}, ${g}, ${b}`;
+        }
+        return '255, 255, 255'; // Default to white
+    }
+    
     gameLoop() {
         // Only update game logic if assets are loaded
         if (this.assetsLoaded) {
             // Handle restart
             if ((this.gameOver || this.levelComplete) && this.keys['KeyR']) {
                 this.restart();
+            }
+            
+            // Performance testing shortcuts (for development/debugging)
+            if (this.keys['KeyP'] && !this.performanceTestPressed) {
+                this.testParticlePerformance();
+                this.performanceTestPressed = true;
+            }
+            if (!this.keys['KeyP']) {
+                this.performanceTestPressed = false;
+            }
+            
+            if (this.keys['KeyO'] && !this.optimizePressed) {
+                this.optimizeParticles();
+                console.log('Manual particle optimization triggered');
+                this.optimizePressed = true;
+            }
+            if (!this.keys['KeyO']) {
+                this.optimizePressed = false;
             }
             
             this.update();
@@ -1112,5 +1891,13 @@ class Game {
 
 // Start the game when page loads
 window.addEventListener('load', () => {
-    new Game();
+    // Create game instance and expose globally for performance testing
+    window.game = new Game();
+    
+    // Add performance testing instructions to console
+    console.log('Super Kiro World - Performance Testing Commands:');
+    console.log('- Press P during gameplay to run particle stress test');
+    console.log('- Press O during gameplay to manually optimize particles');
+    console.log('- Use game.getPerformanceInfo() in console for detailed stats');
+    console.log('- Use game.testParticlePerformance() in console for stress test');
 });
